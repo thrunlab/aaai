@@ -127,26 +127,58 @@ The attached lesions are consisted of four types: epidermal malignant, epidermal
 
 To alleviate this problem as well as balancing between the "foreground" and "background", we first manually exclude areas where original lesions are very salient (this won't be a burden as hundreds of raw body images is enough to train a good detector), then randomly sample the same amount of pixels as the "foreground" over the rest area as the "background".
 
+As we will use deep supervision for better discriminative feature training and better converge result, the label maps will be further downscaled to several different scales. We will use these label maps to supervise the learning process of our model. We denote $C = \{0, 1, 2, 3, 4\}$ as the class labels where $t = 0$ represents the background class. Assume there are $L$ levels of predictions, and at level $l$, we have $n_l$ chosen positions. We denote the position and label pairs in level $l$ as $\{(\mathbf{x}_i^l, t_i^l)^{n_l}_{i=1}\}$, where $\mathbf{x}_i^l = (x_i^l, y_i^l)$ is the 2D positions of the $i$th chosen point, and $t_i^l \in C$.
+
 \subsubsection{Network Structure and Loss Function}
 
 The structure of our network can be viewed in Figure~\ref{fig:network}. Fully convolutional neural network has been proven to be a very good model for pixel wise prediction. On top of it, many improvements have been proposed to further improve the performance, like (ref). 
 
 In our model, we first downscale the feature maps while increasing the number of channels using stacked layers of typical convolution. Then we deconvolute the feature map while incorporating the concept of skip link (ref) to concatenate the deconvolution results with the features from the contractive part of the network.
 
-In order to make the learned features from the middle layers of the model more discriminative, we add a convolutional layer to calculate the final prediction from the features of different scales at the deconvolutional part. Then we add the loss of each prediction level together with different weights. Denote $C = \{0, 1, 2, 3, 4\}$ as the class labels where $t = 0$ represents the background class. Assume there are $L$ levels of predictions, and at level $l$, we have $n_l$ chosen positions. We denote the position and label pairs in level $l$ as $\{(\mathbf{x}_i^l, t_i^l)^{n_l}_{i=1}\}$, where $\mathbf{x}_i^l = (x_i^l, y_i^l)$ is the 2D positions of the $i$th chosen point, and $t_i^l \in C$. On each position $\mathbf{x}^l_i$, our model will calculate a discrete probability distribution $p^{\mathbf{x}^l_i} = (p_0^{\mathbf{x}^l_i}, p_1^{\mathbf{x}^l_i}, \cdots, p_4^{\mathbf{x}^l_i})$, representing the probability over the $5$ classes. If we denote the weight at each level as $\{w_l\mid 1\le l \le L\}$, we have the loss
+In order to make the learned features from the middle layers of the model more discriminative, we add a convolutional layer to calculate the final prediction from the features of different scales at the deconvolutional part. Then we add the loss of each prediction level together with different weights. On each position $\mathbf{x}^l_i$, our model will calculate a discrete probability distribution $p^{\mathbf{x}^l_i} = (p_0^{\mathbf{x}^l_i}, p_1^{\mathbf{x}^l_i}, \cdots, p_4^{\mathbf{x}^l_i})$, representing the probability over the $5$ classes. If we denote the weight at each level as $\{w_l\mid 1\le l \le L\}$, we have the loss
 \begin{align}
   \mathcal{L}_{detection} = -\sum_{l=1}^L \frac{w_l}{n_l} \sum_{i=1}^{n_l} \log{(p_{t_i^l}^{\mathbf{x}^l_i})}
 \end{align}
+The weights $\{w_l\}$ are set manually, and the value is usually becoming larger as $l$ goes higher. Intuitively, the coarser the prediction, the more accurate the neural network should be, and this is also a way to force the network to be more discriminative at a earlier stage.
 
 \subsubsection{Saliency Aware Post Processing}
 
+Some samples of the raw prediction results are shown as (b) in Figure~\ref{fig:raw_results}. Based on the principle that to make the suspicious places salient to the doctors, we use the following post processing techniques to make the confidence map look more organized and meaningful:
+\begin{enumerate}
+  \item[1)] We first calculate the connected components with respected to 4-adjacent connection.
+  \item[2)] Then eliminate those components who hold a size less than a predefined threshold.
+  \item[3)] Then change each connected component into its own convex hull.
+  \item[4)] Then use the ratio between malignant pixels and all foreground pixels inside the convex hull as the probability of being a malignant lesion.
+\end{enumerate}
 
+The results can be seen at (c) in Figure~\ref{fig:raw_results}. We then use this inference results to calculate the precision and recall curve on real clinical images. 
+
+\begin{figure*}[h!]
+  \centering
+  \includegraphics[width=\textwidth]{./raw_results.pdf}
+  \caption{{\bf Samples of the results generated from each stage of our system.}}
+  \label{fig:raw_results}
+\end{figure*}
 
 \subsection{Skin Cancer Tracking}
 
-\subsubsection{Network Structure}
+(Some words to describe the tracking procedure in a high-level way.)
 
-\subsubsection{Loss Function}
+\subsubsection{Training Data Preparation}
+
+As described in the section of Data Synthesize, all the distorted image pairs have pixel-wise correspondence. Since we will use approximately the same model as detection, the correspondence label maps is further downscaled to $L$ different scale for supervising the training of our model. Unlike the label map for detection, all the positions will be chosen for back propagate the loss. We denote $(\mathbf{x}^l_i, \mathbf{t}^l_i)$ as the data of position $i$ on $l$th level, where $\mathbf{x}^l_i = (x^l_i, y^l_i)$ is the 2D position of this point, and $\mathbf{t}^l_i = (\Delta x^l_i, \Delta y^l_i)$ is the label to this position.
+
+\subsubsection{Network Structure and Loss Function}
+
+The network is identical to the network for detection, except that we combine the two images together to form a tensor of channel $6$ instead of channel $3$ as input.
+
+On each position $\mathbf{x}^l_i$, our model will calculate a shift $\mathbf{d}^l_i = (dx^l_i, dy^l_i)$, we have the loss
+\begin{align}
+  \mathcal{L}_{tracking} = \sum_{l=1}^L \frac{w_l}{n_l} \sum_{i=1}^{n_l}
+  \lVert \mathbf{t}^l_i - \mathbf{d}^l_i \rVert
+\end{align}
+where $\{w_l\mid 1\le l \le L\}$ is the weights to each level, and $\lVert \cdot \rVert$ represents the $l_2$-norm, which is the same as calculating the Euclidean distance between the labels and the predictions.
+
 
 \section{Experiments}
 
